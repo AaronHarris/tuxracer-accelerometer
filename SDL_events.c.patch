@@ -1,0 +1,357 @@
+34a35,43
+> /* ----- BEGIN MARK MODIFICATION May 2005----- */
+> #ifdef __linux__
+>  #include <sys/io.h>
+>  #include <unistd.h>
+>  #include <time.h>
+>  #include <sys/time.h>
+> #endif
+> /* ----- END MARK MODIFICATION ----- */
+> 
+388a398,556
+> /* ----- BEGIN MARK MODIFICATION May 2005 ----- */
+> #ifdef __linux__
+> 
+> typedef struct accelerometer_data {
+> #define ACC_STATE_0 0xc8
+> #define ACC_STATE_1 0x0
+> #define ACC_STATE_READY 0x02
+>        	unsigned char state;
+>        	unsigned short accel_X;
+>        	unsigned short accel_Y;
+>        	unsigned char tempC;
+>        	unsigned short accel_X2;
+>        	unsigned short accel_Y2;
+>        	unsigned char tempC2;
+>        	unsigned char unknown1;
+> #define ACC_NO_KBM 0x80
+> #define ACC_KB 0xa0
+> #define ACC_MOUSE 0xc0
+>        	unsigned char kbm_flag;
+> } __attribute__((packed)) accelerometer_data;
+> 
+> static int check_latch(unsigned short port, unsigned char value)
+> {
+> 	unsigned char latchVal;
+> 
+> 	latchVal=inb(port)&0xff; 
+> 	if(latchVal==value) {
+> 		return 0;
+> 	}
+> 	return -1;
+> }
+> 
+> static int wait_for_latch(unsigned short port, unsigned char value)
+> {
+> 	char latchVal;
+> 	int tries=0;
+> 	int maxTries=10;
+> 
+> 	latchVal=inb(port)&0xff; 
+> 	while(latchVal!=value && tries<maxTries)
+> 	{
+> 		usleep(5);
+> 		latchVal=inb(port)&0xff; 
+> 		tries++;
+> 	}
+> 
+> 	if(tries>=maxTries) {
+> 		return -1;
+> 	}
+> 	return 0;
+> }
+> 
+> static int check_refresh()
+> {
+> 	return check_latch(0x1604, 0x50);
+> }
+> 
+> 
+> static int refresh_accelerometer_data(int bSync)
+> {
+> 	if(check_refresh() == 0) {
+> 		return 0;
+> 	}
+> 
+> 	outb(0x11, 0x1610);
+> 	outb(0x1, 0x161f);
+> 
+> 	if(!bSync) {
+> 		return 0;
+> 	}
+> 
+> 	if(wait_for_latch(0x1604, 0x50)!=0) {
+> 		return -1;
+> 	}
+> 
+> 	return 0;
+> }
+> 
+> static void done_read_accelerometer_data()
+> {
+> 	inb(0x161f)&0xff; 
+> 	inb(0x1604)&0xff;
+> }
+> 
+> static void get_io_permissions()
+> {
+> 	iopl(3);
+> }
+> 
+> static int read_accelerometer_data(accelerometer_data *adata)
+> {
+> 	char *buffer=(char*)adata;
+> 	int len=sizeof(*adata);
+> 	int i;
+> 
+> 	if(refresh_accelerometer_data(1)!=0) {
+> 		return -1;
+> 	}
+> 	for(i=0; i<len; i++) {
+> 		buffer[i] = inb(0x1611+i);
+> 	}
+> 	done_read_accelerometer_data();
+> 	refresh_accelerometer_data(0);
+> 	return 0;
+> }
+> 
+> static int initialize_accelerometer(int sec_timeout)
+> {
+> 	int sec_waited=0;
+> 
+> 	outb(0x13, 0x1610);
+> 	outb(0x01, 0x161f);
+> 	wait_for_latch(0x161f, 0x0);
+> 	wait_for_latch(0x1611, 0x3);
+> 
+> 	outb(0x17, 0x1610);
+> 	outb(0x81, 0x1611);
+> 	outb(0x01, 0x161f);
+> 	wait_for_latch(0x161f, 0x0);
+> 	wait_for_latch(0x1611, 0x0);
+> 	wait_for_latch(0x1612, 0x60);
+> 	wait_for_latch(0x1613, 0x0);
+> 	outb(0x14, 0x1610);
+> 	outb(0x01, 0x1611);
+> 	outb(0x01, 0x161f);
+> 	wait_for_latch(0x161f, 0x0);
+> 
+> 	outb(0x10, 0x1610);
+> 	outb(0xc8, 0x1611);
+> 	outb(0x00, 0x1612);
+> 	outb(0x02, 0x1613);
+> 	outb(0x01, 0x161f);
+> 	wait_for_latch(0x161f, 0x0);
+> 
+> 	refresh_accelerometer_data(1);
+> 	wait_for_latch(0x1611, ACC_STATE_1);
+> 
+> 	while(wait_for_latch(0x1611, ACC_STATE_READY)!=0)
+> 	{
+> 		accelerometer_data adata;
+> 		if(sec_waited>sec_timeout) {
+> 			return -1;
+> 		}
+> 		read_accelerometer_data(&adata);
+> 		sleep(1);
+> 		sec_waited++;
+> 	}
+> 	return 0;
+> }
+> 
+> static int init_accelerometer(int sec_timeout)
+> {
+> 	get_io_permissions();
+> 	return initialize_accelerometer(sec_timeout);
+> }
+> 
+> #endif
+> /* ----- END MARK MODIFICATION ----- */
+> 
+392a561,746
+> 	/* ----- BEGIN MARK MODIFICATION May 2005----- */
+> #ifdef __linux__
+> 
+> #define CRANGE (50 / 4)
+> #define ACC_READ_EPOCH_US (500)
+> 
+> 	static int acc_initialized = 0;
+> 	static int now = 0;
+> 	static unsigned short centerX, centerY;
+> 	static accelerometer_data data;	
+> 
+> 	/* See if we need to initialize for the first time */
+> 	if(!acc_initialized)
+> 	{
+> 		struct timeval tv;
+> 		struct timezone tz;
+> 		if(init_accelerometer(10)==0)
+> 			acc_initialized=1;
+> 
+> 		gettimeofday(&tv, &tz);
+> 		now=tv.tv_usec;
+> 		read_accelerometer_data(&data);
+> 		centerX = data.accel_X;
+> 		centerY = data.accel_Y;
+> 	}
+> 
+> 	if(acc_initialized)
+> 	{
+> 		struct timeval tv;
+> 		struct timezone tz;
+> 		int later = 0;
+> 		SDL_keysym sym;
+> 
+> 		gettimeofday(&tv, &tz);
+> 		later = tv.tv_usec;
+> 
+> 		if((later - now > ACC_READ_EPOCH_US) || (now - later > ACC_READ_EPOCH_US))
+> 		{
+> 			read_accelerometer_data(&data);
+> 			now=later;
+> 		}
+> 
+> 		/* Left and right turning. */
+> 		if(data.accel_Y < (centerY - CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_RIGHT;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else if(data.accel_Y > (centerY + CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_LEFT;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_RIGHT;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_LEFT;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 		}
+> 
+> 		/* Forward and back. */
+> 		if(data.accel_X < (centerX - CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_DOWN;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else if(data.accel_X > (centerX + CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_UP;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_DOWN;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_UP;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 		}
+> 
+> 	}
+> 
+> #else
+> 	/* ----- BEGIN TED MODIFICATION 2004----- */
+> #define CRANGE (50 / 2)
+> 	typedef int SENSOR_API;
+> 	typedef struct _ACCELREPORT {
+> 		INT      PresentState;        // Current internal state (stable: 0, unstable1: 1: unstable2: 2)
+> 		USHORT   LatestRawAccelDataX; // latest raw acceleration data of X axis    <-- works!
+> 		USHORT   LatestRawAccelDataY; // latest raw acceleration data of Y axis    <-- works!
+> 		USHORT   LatestAccelDataX;    // latest acceleration data of X axis (average in 40ms)   <-- Works even better?
+> 		USHORT   LatestAccelDataY;    // latest acceleration data of Y axis (average in 40ms)   <-- Works even better?
+> 		CHAR     Temperature;         // latest temperature
+> 		USHORT   LatestZeroG_X;       // latest zero-G offset of X axis  <-- Seems to be the current notion of "center"
+> 		USHORT   LatestZeroG_Y;       // latest zero-G offset of Y axis  <-- ""
+> 	} ACCELREPORT, *PACCELREPORT;
+> 	typedef SENSOR_API (__stdcall *readSensor_t)(PACCELREPORT  pAcceleration);
+> 
+> 	static readSensor_t sensorFunction = 0;
+> 	static USHORT centerX, centerY;
+> 	ACCELREPORT data;	
+> 
+> 	/* See if we need to initialize for the first time */
+> 	if(!sensorFunction)
+> 	{
+> 		HMODULE hSensor = LoadLibrary("Sensor.dll");
+> 		if(hSensor)
+> 		{
+> 			sensorFunction = (readSensor_t) GetProcAddress(hSensor, "ShockproofGetAccelerometerData");
+> 			if(sensorFunction) {
+> 				sensorFunction(&data);
+> 				centerX = data.LatestZeroG_X;
+> 				centerY = data.LatestZeroG_Y;
+> 			}
+> 		}
+> 	}
+> 
+> 	if(sensorFunction)
+> 	{
+> 		SDL_keysym sym;
+> 
+> 		sensorFunction(&data);
+> 
+> 		/* Left and right turning. */
+> 		if(data.LatestAccelDataY > (centerY + CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_RIGHT;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else if(data.LatestAccelDataY < (centerY - CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_LEFT;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_RIGHT;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_LEFT;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 		}
+> 
+> 		/* Forward and back. */
+> 		if(data.LatestAccelDataX > (centerX + CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_DOWN;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else if(data.LatestAccelDataX < (centerX - CRANGE))
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_UP;
+> 			SDL_PrivateKeyboard(SDL_PRESSED, &sym);
+> 		}
+> 		else
+> 		{
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_DOWN;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 
+> 			memset(&sym, 0, sizeof(sym));
+> 			sym.sym = SDLK_UP;
+> 			SDL_PrivateKeyboard(SDL_RELEASED, &sym);
+> 		}
+> 
+> 	}
+> 	/* ----- END TED MODIFICATION ----- */
+> #endif
+> 	/* ----- END MARK MODIFICATION ----- */
+> 

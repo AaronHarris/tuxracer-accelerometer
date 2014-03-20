@@ -1,0 +1,1 @@
+SDL_events.c.patch is for SDL 1.2.10 to enable SDL to use the ThinkPad accelerometer as a directional input device. It was written by Mark A. Smith http://www.almaden.ibm.com/cs/people/marksmith/ and Ted Bonkenburg while working at IBM Almaden Research Center during 2004-2005. It must be applied against SDL-1.2.10/src/events/SDL_events.c
